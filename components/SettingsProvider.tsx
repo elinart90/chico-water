@@ -91,16 +91,23 @@ async function fetchSettings(retries = MAX_RETRIES): Promise<SettingsMap | null>
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LoadState>('loading')
-  const [settings, setSettings] = useState<SettingsMap>(() => {
-    const cached = readCache()
-    if (cached && Date.now() - cached.ts < CACHE_TTL) return { ...DEFAULTS, ...cached.data }
-    return DEFAULTS
-  })
+  // Always start with DEFAULTS on both server and client to avoid hydration mismatch.
+  // Cache and Supabase data are applied only after mount (in useEffect).
+  const [settings, setSettings] = useState<SettingsMap>(DEFAULTS)
 
   useEffect(() => {
+    // Check localStorage cache first — instant, no network needed
     const cached = readCache()
-    if (cached && Date.now() - cached.ts < CACHE_TTL) { setState('cached'); return }
-    if (typeof navigator !== 'undefined' && !navigator.onLine) { setState('offline'); return }
+    if (cached && Date.now() - cached.ts < CACHE_TTL) {
+      setSettings({ ...DEFAULTS, ...cached.data })
+      setState('cached')
+      return
+    }
+
+    if (!navigator.onLine) {
+      setState('offline')
+      return
+    }
 
     fetchSettings().then(data => {
       if (data) {
@@ -108,7 +115,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         writeCache(data)
         setState('loaded')
       } else {
-        setState(cached ? 'cached' : 'error')
+        // Fetch failed — apply stale cache if any, otherwise keep defaults
+        if (cached) {
+          setSettings({ ...DEFAULTS, ...cached.data })
+          setState('cached')
+        } else {
+          setState('error')
+        }
       }
     })
   }, [])
